@@ -13,7 +13,7 @@ dt-launchfile-init
 # NOTE: Use `dt-exec COMMAND` to run the main process (blocking process)
 
 # launching app
-dt-exec rosrun lab_4 sh.py
+dt-exec rosrun lab_5 main.py
 
 # ----------------------------------------------------------------------------
 # YOUR CODE ABOVE THIS LINE
