@@ -3,17 +3,18 @@
 from copy import deepcopy
 import os
 import numpy as np
+import math
 import yaml
 import cv2
 import os
 from tag import Tag
-# from pupil_apriltags import Detector
 from dt_apriltags import Detector
 from duckietown_msgs.msg import Twist2DStamped, LanePose, ButtonEvent, WheelsCmdStamped
 from duckietown.dtros import DTROS, NodeType
 import rospy   
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge, CvBridgeError
+from multiprocessing import cpu_count
 
 class Lab5(DTROS):
     def __init__(self, node_name):
@@ -48,14 +49,38 @@ class Lab5(DTROS):
             if self.latest_gray is None:
                 rospy.loginfo_throttle(1., 'Waiting to grab camera image...')
                 continue
+
             gray = deepcopy(self.latest_gray)
             detected_tags = self.detect(gray)
             rospy.logwarn('Detected AprilTags: {}'.format([x.tag_id for x in detected_tags]))
+            if len(detected_tags) > 0:
+                tag = detected_tags[0]
+                pose_R = tag.pose_R
+                pose_t = tag.pose_t
+                # print(type(pose_R))
+                # print(pose_R)
+
+                camera_rotation_x = 180 * np.arctan(pose_R[1][0] / pose_R[0][0]) / math.pi
+                camera_rotation_y = 180 * np.arcsin(-1 * pose_R[2][0]) / math.pi
+                camera_rotation_z = 180 * np.arctan(pose_R[2][1] / pose_R[2][2]) / math.pi
+                camera_x, camera_y, camera_z = pose_t
+
+                print("rotation x = " + str(camera_rotation_x))
+                print("rotation y = " + str(camera_rotation_y))
+                print("rotation z = " + str(camera_rotation_z))
+                print("X: " + str(camera_x))
+                print("Y: " + str(camera_y))
+                print("Z: " + str(camera_z))
+                
+                # if [x.tag_id for x in detected_tags]==[0]:
+                #     pass
+
             self.r.sleep()
 
     def img_callback(self, data):
         img = self.bridge.compressed_imgmsg_to_cv2(data)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        undistorted_img = self.undistort(img)
+        gray = cv2.cvtColor(undistorted_img, cv2.COLOR_BGR2GRAY)
         self.latest_gray = gray
 
     '''
@@ -87,7 +112,7 @@ class Lab5(DTROS):
         undistorted_image = cv2.remap(img, map_x, map_y, cv2.INTER_LINEAR)
        
         return undistorted_image   
-             
+
     '''
         Takes an images and detects AprilTags
     '''
@@ -100,7 +125,7 @@ class Lab5(DTROS):
         ]
 
         TAG_SIZE = 0.08 
-        detector = Detector(families="tagStandard41h12", nthreads=1)
+        detector = Detector(families="tagStandard41h12", nthreads=cpu_count())
         detected_tags = detector.detect(
             img, 
             estimate_tag_pose=True, 
@@ -120,4 +145,4 @@ class Lab5(DTROS):
         if manual:
             rospy.signal_shutdown('Manual shutdown')
 
-Lab5('lab_5_main')
+lab_5 = Lab5('lab_5_main')
