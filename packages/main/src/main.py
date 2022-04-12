@@ -28,9 +28,16 @@ class Lab5(DTROS):
         vehicle_name = os.environ['VEHICLE_NAME'] if 'VEHICLE_NAME' in os.environ else 'csc22917'
         self.pub_action = rospy.Publisher("/{}/joy_mapper_node/car_cmd".format(vehicle_name), Twist2DStamped, queue_size=10)
         self.img_sub = rospy.Subscriber("/{}/camera_node/image/compressed".format(vehicle_name), CompressedImage, self.img_callback)
+        self.__id_map = {
+            0: [0, 0, 0.3048, 0, 0, 0],
+            1: [0.3048, 0, 0.6096, 0, math.pi / 2, 0],
+            2: [0.6096, 0, 0.3048, 0, math.pi, 0],
+            3: [0.3048, 0, 0, 0, -math.pi / 2, 0],
+            4: [0.3048, 0, 0, 0, -math.pi / 2, 0]
+        }
 
         # TODO: add information about tags
-        TAG_SIZE = .08
+        TAG_SIZE = 0.08
         FAMILIES = "tagStandard41h12"
         self.tags = Tag(TAG_SIZE, FAMILIES)
 
@@ -44,6 +51,7 @@ class Lab5(DTROS):
 
         self.camera_intrinsic_matrix = np.array(camera_list['camera_matrix']['data']).reshape(3, 3)
         self.distortion_coeff = np.array(camera_list['distortion_coefficients']['data']).reshape(5, 1)
+        detector = Detector(families=FAMILIES, nthreads=cpu_count())
 
         while not rospy.is_shutdown():
             if self.latest_gray is None:
@@ -51,31 +59,61 @@ class Lab5(DTROS):
                 continue
 
             gray = deepcopy(self.latest_gray)
-            detected_tags = self.detect(gray)
-            rospy.logwarn('Detected AprilTags: {}'.format([x.tag_id for x in detected_tags]))
+            detected_tags = self.detect(gray, detector=detector)
+            rospy.logwarn_throttle(1., 'Detected AprilTags: {}'.format([x.tag_id for x in detected_tags]))
             if len(detected_tags) > 0:
-                tag = detected_tags[0]
-                pose_R = tag.pose_R
-                pose_t = tag.pose_t
-                # print(type(pose_R))
-                # print(pose_R)
+                pose_estimates = []
+                for tag in detected_tags:
+                    tag_id = tag.tag_id
+                    
+                    pose_R = tag.pose_R
+                    pose_t = tag.pose_t
+                    
+                    camera_rotation_x = 180 * np.arctan(pose_R[1][0] / pose_R[0][0]) / math.pi
+                    camera_rotation_y = 180 * np.arcsin(-1 * pose_R[2][0]) / math.pi
+                    camera_rotation_z = 180 * np.arctan(pose_R[2][1] / pose_R[2][2]) / math.pi
+                    
+                    R = self.tags.eulerAnglesToRotationMatrix(camera_rotation_x, camera_rotation_y, camera_rotation_z)
+                    t = self.tags.TranslationVector(*pose_t).reshape(3, 1)
+                    self.tags.add_tag(tag_id, *self.__id_map[tag_id])
+                    estimate = self.tags.estimate_pose(tag_id, R, t)
+                    pose_estimates.append(estimate)
 
-                camera_rotation_x = 180 * np.arctan(pose_R[1][0] / pose_R[0][0]) / math.pi
-                camera_rotation_y = 180 * np.arcsin(-1 * pose_R[2][0]) / math.pi
-                camera_rotation_z = 180 * np.arctan(pose_R[2][1] / pose_R[2][2]) / math.pi
-                camera_x, camera_y, camera_z = pose_t
+                    # rospy.logerr_throttle(1., 'Pose estimate for : {}'.format(estimate))
+                    
+                    # P = np.array([
+                    #     [1, 0, 0],
+                    #     [0, -1, 0],
+                    #     [0, 0, -1]
+                    # ])
+                    # unofficial_tag_position = P @ pose_R.T @ (-1 * pose_t)
+                    # global_position = R_g @ unofficial_tag_position + t_g
 
-                print("rotation x = " + str(camera_rotation_x))
-                print("rotation y = " + str(camera_rotation_y))
-                print("rotation z = " + str(camera_rotation_z))
-                print("X: " + str(camera_x))
-                print("Y: " + str(camera_y))
-                print("Z: " + str(camera_z))
-                
-                # if [x.tag_id for x in detected_tags]==[0]:
-                #     pass
+                    # self.tags.add_tag(0, 0, 0, 0.3048, 0, 0, 0)
+                    # self.tags.add_tag(1, 0.3048,0, 0.6096, 0, math.pi/2,0)
+                    # self.tags.add_tag(2, 0.6096, 0, 0.3048, 0, math.pi, 0)
+                    # self.tags.add_tag(3, 0.3048, 0, 0, 0, -math.pi/2, 0)
+
+                    # print(type(pose_R))
+                    # print(pose_R)
+
+                    # camera_rotation_x = 180 * np.arctan(pose_R[1][0] / pose_R[0][0]) / math.pi
+                    # camera_rotation_y = 180 * np.arcsin(-1 * pose_R[2][0]) / math.pi
+                    # camera_rotation_z = 180 * np.arctan(pose_R[2][1] / pose_R[2][2]) / math.pi
+                    # camera_x, camera_y, camera_z = pose_t
+
+                    # print("rotation x = " + str(camera_rotation_x))
+                    # print("rotation y = " + str(camera_rotation_y))
+                    # print("rotation z = " + str(camera_rotation_z))
+                    # print("X: " + str(camera_x))
+                    # print("Y: " + str(camera_y))
+                    # print("Z: " + str(camera_z))
+
+                rospy.logerr_throttle(1., 'Pose estimate for : {}'.format(np.mean(pose_estimates, axis=0)))
 
             self.r.sleep()
+        
+        print('Doning')
 
     def img_callback(self, data):
         img = self.bridge.compressed_imgmsg_to_cv2(data)
@@ -116,7 +154,7 @@ class Lab5(DTROS):
     '''
         Takes an images and detects AprilTags
     '''
-    def detect(self, img):
+    def detect(self, img, detector=None):
         PARAMS = [
             self.camera_intrinsic_matrix[0, 0],
             self.camera_intrinsic_matrix[1, 1],
@@ -124,8 +162,11 @@ class Lab5(DTROS):
             self.camera_intrinsic_matrix[1, 2]
         ]
 
-        TAG_SIZE = 0.08 
-        detector = Detector(families="tagStandard41h12", nthreads=cpu_count())
+        TAG_SIZE = 0.08
+        
+        if detector is None:
+            detector = Detector(families="tagStandard41h12", nthreads=cpu_count())
+        
         detected_tags = detector.detect(
             img, 
             estimate_tag_pose=True, 

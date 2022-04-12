@@ -10,6 +10,8 @@ class Tag():
         self.size = tag_size
         self.locations = {}
         self.orientations = {}
+        self.corr = np.eye(3)
+        self.corr[0, 0] = -1
     
     def add_tag(self, id, x, y, z, theta_x, theta_y, theta_z):
         self.locations[id] = self.TranslationVector(x, y, z)
@@ -40,4 +42,5 @@ class Tag():
         return np.array([[x], [y], [z]])
 
     def estimate_pose(self, tag_id, R, t):
-        raise NotImplementedError
+        local = self.corr @ R.T @ t
+        return self.orientations[tag_id] @ local + self.locations[tag_id]
